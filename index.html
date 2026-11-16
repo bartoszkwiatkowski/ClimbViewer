@@ -95,6 +95,7 @@ th{color:var(--ink2);font-weight:600}
     <select id="src">
       <option value="auto">Auto (best available)</option>
       <option value="ign">IGN France (high-res)</option>
+      <option value="es">IGN Spain + Canaries (high-res)</option>
       <option value="pl">GUGiK Poland (high-res)</option>
       <option value="terrarium">Terrain tiles (global)</option>
       <option value="orig">Route's own elevation</option>
@@ -158,6 +159,7 @@ const BIN_CHOICES = [25,50,100,200,250,500,1000,2000,5000];
 const SRC_INFO = {
   ign:       {label:"IGN RGE ALTI (France, 1–5 m terrain model)", minBin:50,  sigma:15},
   pl:        {label:"GUGiK NMT (Poland, ~1 m LiDAR terrain model)", minBin:50, sigma:15},
+  es:        {label:"IGN España MDT05 (Spain + Canaries, 5 m LiDAR terrain model)", minBin:50, sigma:15},
   terrarium: {label:"AWS Terrain Tiles (global mix, mostly 10–30 m)", minBin:200, sigma:30},
   orig:      {label:"route's own elevation (GPX / BRouter SRTM)", minBin:200, sigma:40},
 };
@@ -264,6 +266,27 @@ async function elevGUGIK(lat,lon,prog){
   });
   return out;
 }
+/* Spain incl. Balearics & Canaries: IGN España OGC API Process "getElevation" on MDT05 (5 m LiDAR terrain
+   model; free, no key, CORS ok). WKT MULTIPOINT in lon/lat; answers keep input order, -9999 = no data
+   (outside Spain / sea). Tested: 5000 points per request in ~4 s. */
+const ES_URL="https://api-processes.idee.es/processes/getElevation/execution";
+async function elevES(lat,lon,prog){
+  const out=new Array(lat.length).fill(NaN), CH=2500, starts=[];
+  for(let i=0;i<lat.length;i+=CH) starts.push(i);
+  let done=0;
+  await pool(starts,3,async i=>{
+    const n=Math.min(CH,lat.length-i);
+    const wkt="MULTIPOINT("+lat.slice(i,i+n).map((la,k)=>`(${lon[i+k].toFixed(6)} ${la.toFixed(6)})`).join(",")+")";
+    const r=await fetch(ES_URL,{method:"POST",headers:{"Content-Type":"application/json"},signal:AbortSignal.timeout(45000),
+      body:JSON.stringify({inputs:{geom:wkt,formato:"wkt",crs:4326,withCoord:false,outputFormat:"array"}})});
+    if(!r.ok) throw new Error("IGN Spain HTTP "+r.status);
+    const v=(await r.json()).values;
+    if(!Array.isArray(v) || v.length!==n) throw new Error("IGN Spain returned an unexpected answer");
+    v.forEach((e,k)=>{ out[i+k]= (typeof e!=="number" || e<-1000) ? NaN : e; });
+    prog(++done/starts.length);
+  });
+  return out;
+}
 const tileCache=new Map();
 function loadTile(x,y){
   const k=x+"/"+y;
@@ -309,6 +332,8 @@ function fillGaps(a){ // linear interpolation over NaN; returns null if all NaN
 }
 function inFranceBox(g){ const la=g.lat[0], lo=g.lon[0]; return la>41 && la<51.6 && lo>-5.6 && lo<9.9; }
 function inPolandBox(g){ const la=g.lat[0], lo=g.lon[0]; return la>48.9 && la<55 && lo>14 && lo<24.2; }
+function inSpainBox(g){ const la=g.lat[0], lo=g.lon[0];
+  return (la>35.2 && la<44 && lo>-9.6 && lo<4.6) || (la>27.4 && la<29.6 && lo>-18.4 && lo<-13.2); } // mainland+Balearics, Canaries
 
 async function fetchElevation(){
   const g=S.g, want=$("#src").value;
@@ -321,6 +346,12 @@ async function fetchElevation(){
     return fillGaps(r);
   };
   const tryPL=async()=>elevGUGIK(g.lat,g.lon,prog("GUGiK"));
+  const tryES=async()=>{
+    const r=await elevES(g.lat,g.lon,prog("IGN Spain"));
+    const miss=r.filter(isNaN).length/r.length;
+    if(miss>0.02) throw new Error(`IGN Spain has no data for ${Math.round(miss*100)}% of the route (outside Spain)`);
+    return fillGaps(r);
+  };
   const tryTerr=async()=>elevTerrarium(g.lat,g.lon,prog("terrain tiles"));
   try{
     if(want==="orig"){
@@ -330,12 +361,16 @@ async function fetchElevation(){
       raw=await tryIGN(); used="ign";
     } else if(want==="pl"){
       raw=await tryPL(); used="pl";
+    } else if(want==="es"){
+      raw=await tryES(); used="es";
     } else if(want==="terrarium"){
       raw=await tryTerr(); used="terrarium";
     } else {
       if(inFranceBox(g)){ try{ raw=await tryIGN(); used="ign"; }catch(e){ note=e.message+"; "; } }
+      if(!raw && inSpainBox(g)){ try{ raw=await tryES(); used="es"; }catch(e){ note+=e.message+"; "; } }
       if(!raw && inPolandBox(g)){ try{ raw=await tryPL(); used="pl"; }catch(e){ note+=e.message+"; "; } }
       if(!raw){ if(note) note+="using terrain tiles. "; raw=await tryTerr(); used="terrarium"; }
+      else note=""; // another high-res source took over (e.g. Spanish Pyrenees: IGN France -> IGN Spain): nothing to warn about
     }
   }catch(e){
     if(used===null && want!=="terrarium"){ note=e.message+"; using terrain tiles. "; raw=await tryTerr(); used="terrarium"; }

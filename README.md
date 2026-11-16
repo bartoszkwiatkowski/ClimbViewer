@@ -19,6 +19,7 @@ It's a single static page (`index.html`): no build step, no server code, no API 
 | What | Source |
 | --- | --- |
 | Elevation, France | IGN RGE ALTI (1–5 m terrain model) |
+| Elevation, Spain, Balearics & Canaries | IGN España MDT05 (5 m LiDAR terrain model) |
 | Elevation, Poland | GUGiK NMT (~1 m LiDAR terrain model) |
 | Elevation, elsewhere | AWS Terrain Tiles (mostly 10–30 m; bars under ~200 m are approximate) |
 | Routing | BRouter (brouter.de), with OSRM bike routing as a backup |
