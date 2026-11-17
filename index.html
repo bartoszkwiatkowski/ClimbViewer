@@ -71,6 +71,7 @@ th{color:var(--ink2);font-weight:600}
 .axis text{fill:var(--muted);font-size:11px}
 .pin{width:22px;height:22px;border-radius:50%;color:#fff;font:700 12px/22px system-ui;text-align:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}
 .pin.a{background:#16a34a}.pin.b{background:#dc2626}
+.pin.v{width:18px;height:18px;font-size:10px;line-height:18px;background:#2563eb;cursor:pointer}
 #drop{position:fixed;inset:0;background:rgba(37,99,235,.15);border:3px dashed var(--accent);display:none;align-items:center;justify-content:center;font-size:20px;z-index:3000;pointer-events:none}
 </style>
 </head>
@@ -465,26 +466,57 @@ Object.entries(baseMaps).forEach(([n,l])=>{ let errs=0; l.on("tileerror",()=>{ i
 L.control.layers(baseMaps,null,{position:"topright"}).addTo(map);
 const baseLayer=L.layerGroup().addTo(map), binLayer=L.layerGroup().addTo(map), pinLayer=L.layerGroup().addTo(map);
 const hoverDot=L.circleMarker([0,0],{radius:7,color:"#fff",weight:2,fillColor:"#2563eb",fillOpacity:1,interactive:false});
-const pinIcon=t=>L.divIcon({className:"",html:`<div class="pin ${t==="A"?"a":"b"}">${t}</div>`,iconSize:[22,22],iconAnchor:[11,11]});
+const pinIcon=(kind,label)=>kind==="V"
+  ? L.divIcon({className:"",html:`<div class="pin v">${label}</div>`,iconSize:[18,18],iconAnchor:[9,9]})
+  : L.divIcon({className:"",html:`<div class="pin ${kind==="A"?"a":"b"}">${kind}</div>`,iconSize:[22,22],iconAnchor:[11,11]});
 
+/* S.pts = [A, via 1, …, via n, B]. Click 1 = A, click 2 = B; once routed, each further map click adds a via point
+   (forces the route through that road). Pins are draggable; clicking a via pin removes it. */
+const MAX_VIA=20;
+const VIA_HINT=" <span style='color:var(--muted)'>Wrong road? Click the road you want on the map to add a via point; drag pins to adjust, click a via pin to remove it.</span>";
+let routedKey=""; // S.pts the current S.g was routed from (lets via insertion use the route's own order)
+const ptsKey=()=>S.pts.map(p=>p.lat.toFixed(6)+","+p.lng.toFixed(6)).join(";");
 map.on("click",e=>{
-  if(S.pts.length>=2) return;
-  S.pts.push(e.latlng); drawPins();
-  if(S.pts.length===1) status("Start set. Now click the <b>top</b> of the climb.");
-  else routeFromPts(true);
+  if(S.pts.length<2){
+    S.pts.push(e.latlng); drawPins();
+    if(S.pts.length===1) status("Start set. Now click the <b>top</b> of the climb.");
+    else routeFromPts(true);
+    return;
+  }
+  if(S.pts.length-2>=MAX_VIA){ status(`At most ${MAX_VIA} via points. Click a via pin to remove one.`,true); return; }
+  S.pts.splice(viaInsertIndex(e.latlng),0,e.latlng); drawPins(); routeFromPts(false);
 });
+// Where a new via point goes in S.pts: by position along the current route if it was routed from these pins
+// (robust on switchbacks), else where it adds the least straight-line detour.
+function viaInsertIndex(x){
+  const n=S.pts.length;
+  if(S.g && routedKey===ptsKey()){
+    const g=S.g, near=p=>{ let bi=0,bd=Infinity; for(let i=0;i<g.lat.length;i+=2){ const d=hav(p.lat,p.lng,g.lat[i],g.lon[i]); if(d<bd){bd=d;bi=i;} } return bi; };
+    const k=near(x); let pos=1; for(let j=1;j<n-1;j++) if(near(S.pts[j])<=k) pos=j+1; return pos;
+  }
+  let best=1, bc=Infinity;
+  for(let i=0;i<n-1;i++){ const a=S.pts[i], b=S.pts[i+1];
+    const c=hav(a.lat,a.lng,x.lat,x.lng)+hav(x.lat,x.lng,b.lat,b.lng)-hav(a.lat,a.lng,b.lat,b.lng); if(c<bc){bc=c;best=i+1;} }
+  return best;
+}
 function drawPins(){
   pinLayer.clearLayers();
-  S.pts.forEach((p,i)=>{ const m=L.marker(p,{draggable:true,icon:pinIcon(i?"B":"A")}).addTo(pinLayer);
-    m.on("dragend",()=>{ S.pts[i]=m.getLatLng(); if(S.pts.length===2) routeFromPts(false); }); });
+  const last=S.pts.length-1;
+  S.pts.forEach((p,i)=>{
+    const isVia=i>0 && i<last, label= i===0 ? "A" : (isVia ? String(i) : "B");
+    const m=L.marker(p,{draggable:true,icon:pinIcon(isVia?"V":label,label),zIndexOffset:isVia?0:500,
+      title:isVia?`Via point ${i}: drag to move, click to remove`:(i===0?"Start: drag to move":"Top: drag to move")}).addTo(pinLayer);
+    m.on("dragend",()=>{ S.pts[i]=m.getLatLng(); if(S.pts.length>=2) routeFromPts(false); });
+    if(isVia) m.on("click",()=>{ S.pts.splice(i,1); drawPins(); routeFromPts(false); });
+  });
 }
 let routeSeq=0;
 async function routeFromPts(fit){
-  const [A,B]=S.pts, prof=$("#profile").value, seq=++routeSeq;
-  status("Routing along roads with BRouter… (the free public server can take 5–20 s)");
+  const P=S.pts.slice(), prof=$("#profile").value, seq=++routeSeq, nVia=P.length-2;
+  status(`Routing along roads with BRouter${nVia?` via ${nVia} point${nVia>1?"s":""}`:""}… (the free public server can take 5–20 s)`);
   let c=null, note="";
   try{
-    const url=`${BRUTER}?lonlats=${A.lng.toFixed(6)},${A.lat.toFixed(6)}|${B.lng.toFixed(6)},${B.lat.toFixed(6)}&profile=${prof}&alternativeidx=0&format=geojson`;
+    const url=`${BRUTER}?lonlats=${P.map(p=>p.lng.toFixed(6)+","+p.lat.toFixed(6)).join("|")}&profile=${prof}&alternativeidx=0&format=geojson`;
     const r=await fetch(url,{signal:AbortSignal.timeout(40000)}); const txt=await r.text();
     if(!r.ok || txt[0]!=="{") throw new Error(txt.slice(0,160));
     c=JSON.parse(txt).features[0].geometry.coordinates;
@@ -492,19 +524,20 @@ async function routeFromPts(fit){
     if(seq!==routeSeq) return;
     status("BRouter did not answer; trying the backup router (OSRM bike)…");
     try{
-      const r=await fetch(`https://routing.openstreetmap.de/routed-bike/route/v1/driving/${A.lng.toFixed(6)},${A.lat.toFixed(6)};${B.lng.toFixed(6)},${B.lat.toFixed(6)}?overview=full&geometries=geojson`,{signal:AbortSignal.timeout(20000)});
+      const r=await fetch(`https://routing.openstreetmap.de/routed-bike/route/v1/driving/${P.map(p=>p.lng.toFixed(6)+","+p.lat.toFixed(6)).join(";")}?overview=full&geometries=geojson`,{signal:AbortSignal.timeout(20000)});
       const j=await r.json(); if(j.code!=="Ok") throw new Error(j.message||j.code);
       c=j.routes[0].geometry.coordinates;
       note="Routed with the backup router (BRouter unavailable). <b>Check the line on the map</b>: it may choose a different road; drag A/B to adjust. ";
     }catch(e2){ if(seq===routeSeq) status("Routing failed: "+esc(e.message||e2.message)+". Try again, or load a GPX.",true); return; }
   }
   if(seq!==routeSeq) return; // a newer request superseded this one
-  location.hash=`r=${A.lat.toFixed(5)},${A.lng.toFixed(5)};${B.lat.toFixed(5)},${B.lng.toFixed(5)}&p=${prof}`; hashSeen=location.hash;
-  await loadTrack({lat:c.map(p=>p[1]),lon:c.map(p=>p[0]),ele:c[0].length>2?c.map(p=>p[2]):null}, S.name||"Custom climb", fit, note);
+  location.hash=`r=${P.map(p=>p.lat.toFixed(5)+","+p.lng.toFixed(5)).join(";")}&p=${prof}`; hashSeen=location.hash;
+  await loadTrack({lat:c.map(p=>p[1]),lon:c.map(p=>p[0]),ele:c[0].length>2?c.map(p=>p[2]):null}, S.name||"Custom climb", fit, note, VIA_HINT);
+  if(seq===routeSeq) routedKey=P.map(p=>p.lat.toFixed(6)+","+p.lng.toFixed(6)).join(";");
 }
 
 /* ---------- loading ---------- */
-async function loadTrack(t,name,fit,preNote=""){
+async function loadTrack(t,name,fit,preNote="",tail=""){
   if(t.lat.length<2){ status("The route has fewer than 2 points.",true); return; }
   S.track=t; S.name=name; S.g=resample(t);
   if(S.g.L<100){ status("The route is shorter than 100 m.",true); return; }
@@ -516,7 +549,7 @@ async function loadTrack(t,name,fit,preNote=""){
     L.polyline(ll,{color:"#64748b",weight:5,opacity:.55,interactive:false}).addTo(baseLayer);
     if(fit) map.fitBounds(L.latLngBounds(ll),{padding:[30,30]});
     $("#reverse").disabled=false;
-    status(preNote+note+`Loaded: ${(S.g.L/1000).toFixed(2)} km. Elevation: ${SRC_INFO[S.usedSrc].label}.`);
+    status(preNote+note+`Loaded: ${(S.g.L/1000).toFixed(2)} km. Elevation: ${SRC_INFO[S.usedSrc].label}.`+tail);
     renderAll();
   }catch(e){ status("Elevation failed: "+esc(e.message),true); }
 }
@@ -579,10 +612,10 @@ $("#clear").onclick=()=>{ S.pts=[]; S.track=null; S.g=null; S.name=""; drawPins(
   clearHash(); $("#reverse").disabled=true;
   status("Cleared. Click the <b>start</b> of a climb, then the <b>top</b>."); renderAll(); };
 $("#reverse").onclick=()=>{
-  if(S.pts.length===2){ S.pts.reverse(); drawPins(); routeFromPts(false); }
+  if(S.pts.length>=2){ S.pts.reverse(); drawPins(); routeFromPts(false); }
   else if(S.track){ const t=S.track; loadTrack({lat:t.lat.slice().reverse(),lon:t.lon.slice().reverse(),ele:t.ele?t.ele.slice().reverse():null},S.name,false); }
 };
-$("#profile").onchange=()=>{ if(S.pts.length===2) routeFromPts(false); };
+$("#profile").onchange=()=>{ if(S.pts.length>=2) routeFromPts(false); };
 $("#src").onchange=()=>{ if(S.track) loadTrack(S.track,S.name,false); };
 $("#smooth").onchange=()=>{ if(S.g){ process(); renderAll(); } };
 $("#bars").onchange=()=>scheduleRender();
@@ -802,7 +835,7 @@ function routeFromHash(){
   const h=new URLSearchParams(location.hash.slice(1)), r=h.get("r");
   if(h.get("p")) $("#profile").value=h.get("p");
   if(r){ const pts=r.split(";").map(s=>s.split(",").map(Number));
-    if(pts.length===2 && pts.every(p=>p.length===2 && p.every(isFinite))){ S.pts=pts.map(p=>L.latLng(p[0],p[1])); drawPins(); routeFromPts(true); } }
+    if(pts.length>=2 && pts.length<=MAX_VIA+2 && pts.every(p=>p.length===2 && p.every(isFinite))){ S.pts=pts.map(p=>L.latLng(p[0],p[1])); drawPins(); routeFromPts(true); } }
 }
 addEventListener("hashchange",routeFromHash);
 (function init(){ renderAll(); routeFromHash(); })();

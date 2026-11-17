@@ -9,10 +9,11 @@ It's a single static page (`index.html`): no build step, no server code, no API 
 ## How to use
 
 1. Search for a place, then click the **start** and the **top** of the climb on the map. The route follows roads (BRouter).
+   - **Wrong road?** Click the road you want on the map to add a numbered via point. The route is forced through it, which is useful for small or narrow roads the router avoids. You can add up to 20 via points. Drag any pin to move it; click a via pin to remove it.
 2. Zoom the chart with the mouse wheel. Drag to pan. Click a bar to zoom into it. **◀ Back** goes to the previous view.
 3. **Last 1 km** and **Steepest 1 km** are toggles: click again to go back.
 4. Hover over the chart to see the elevation, the gradient at that point (over 100 m), and the gradient of the bar.
-5. The link in the address bar holds the route, so you can share a link to a specific climb.
+5. The link in the address bar holds the route, including via points, so you can share a link to a specific climb.
 
 ## Data sources
 
