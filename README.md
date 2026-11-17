@@ -29,15 +29,11 @@ It's a single static page (`index.html`): no build step, no server code, no API 
 
 All are free public services. Please keep usage light: they're run as community services.
 
-## Publish on GitHub Pages
-
-1. On github.com, create a new **public** repository, e.g. `ClimbViewer`.
-2. Click **uploading an existing file** and drag in `index.html`, `README.md` and `serve.cmd`. You can also add `.nojekyll`; it's optional. Then commit.
-3. Go to **Settings → Pages**. Under **Build and deployment**, set **Source: Deploy from a branch** and **Branch: `main` / `(root)`**, then click **Save**.
-4. After about a minute the site is live at `https://<your-username>.github.io/ClimbViewer/`.
-
-To update the site, upload a new `index.html` to the repository. The site refreshes within a minute or so.
-
 ## Run locally
 
-Double-click `serve.cmd`, which opens `http://localhost:8765/`. Opening `index.html` straight from disk also works, but OpenStreetMap blocks map tiles for pages opened from disk, so the OSM France map is used instead.
+You need Python 3 for the local web server.
+
+- **Windows:** double-click `serve.cmd`. It starts a server and opens `http://localhost:8765/`. Close the window to stop it.
+- **macOS / Linux:** in the repository folder, run `python3 -m http.server 8765 --bind 127.0.0.1`, then open `http://localhost:8765/`.
+
+Opening `index.html` straight from disk also works, but OpenStreetMap blocks map tiles for pages opened from disk, so the OSM France map is used instead.
